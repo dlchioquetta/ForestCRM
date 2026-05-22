@@ -11,23 +11,30 @@ st.set_page_config(page_title="Forest CRM", layout="wide")
 
 @st.cache_resource
 def init_connection():
+    # Puxa APENAS as credenciais do TOML
     creds_dict = st.secrets["gcp_service_account"]
     client = gspread.service_account_from_dict(creds_dict)
-    # Busca pelo ID EXATO da planilha (ignora problemas de atalho/pasta)
-    sheet_id = st.secrets["spreadsheet_id"]
+    
+    # BYPASS: ID hardcoded direto no código.
+    # Cole o ID da sua planilha AQUI, entre as aspas:
+    sheet_id = "1Wgzdmr94dnBo2HqadmUWXWyodcsA7pTIJRbIvvvbiWE" 
+    
     return client.open_by_key(sheet_id)
 
 try:
     conn = init_connection()
     ws_leads = conn.worksheet("DB_Leads")
     ws_timeline = conn.worksheet("DB_Timeline")
-except gspread.exceptions.APIError as e:
-    # Isso vai forçar o Streamlit a cuspir o erro real do Google na tela
-    st.error("ERRO DIRETO DO GOOGLE:")
-    st.code(e.response.text)
+    
+except gspread.exceptions.SpreadsheetNotFound:
+    st.error("🚨 ERRO DE ROTA: O Google negou o acesso. Ou o ID está errado, ou o e-mail do bot não foi adicionado como Editor nesta cópia exata da planilha.")
+    st.stop()
+except KeyError as e:
+    st.error(f"🚨 ERRO DE SECRETS: O Streamlit não encontrou o bloco de credenciais JSON. Faltou a chave: {e}")
     st.stop()
 except Exception as e:
-    st.error(f"Erro genérico: {e}")
+    # Agora ele imprime o TIPO do erro e a MENSAGEM exata, impossível ser genérico.
+    st.error(f"🚨 ERRO SISTÊMICO: {type(e).__name__} - {e}")
     st.stop()
 # ==========================================
 # 2. FUNÇÕES DE ARQUITETURA
