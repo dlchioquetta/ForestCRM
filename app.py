@@ -21,10 +21,14 @@ try:
     conn = init_connection()
     ws_leads = conn.worksheet("DB_Leads")
     ws_timeline = conn.worksheet("DB_Timeline")
-except Exception as e:
-    st.error(f"Erro ao conectar com o banco de dados: {e}")
+except gspread.exceptions.APIError as e:
+    # Isso vai forçar o Streamlit a cuspir o erro real do Google na tela
+    st.error("ERRO DIRETO DO GOOGLE:")
+    st.code(e.response.text)
     st.stop()
-
+except Exception as e:
+    st.error(f"Erro genérico: {e}")
+    st.stop()
 # ==========================================
 # 2. FUNÇÕES DE ARQUITETURA
 # ==========================================
