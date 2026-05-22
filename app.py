@@ -20,8 +20,9 @@ try:
     conn = init_connection()
     ws_leads = conn.worksheet("DB_Leads")
     ws_timeline = conn.worksheet("DB_Timeline")
+    ws_notas = conn.worksheet("DB_Comentarios")
 except Exception as e:
-    st.error(f"🚨 ERRO DE CONEXÃO: {type(e).__name__} - {e}")
+    st.error(f"🚨 ERRO DE CONEXÃO: Verifique se a aba DB_Comentarios foi criada. Erro técnico: {type(e).__name__} - {e}")
     st.stop()
 
 # ==========================================
@@ -32,6 +33,12 @@ def get_leads_data():
     if not data:
         cols = ["ID_Lead", "Nome", "Contato", "Condominio", "Cidade", "Origem", "CPF_CNPJ", "Status_atual", "TS_Criacao", "TS_EmContato", "TS_Fechamento", "TS_Concluido", "TS_Perdido", "Fase_Perda", "Motivo_Perda", "Status_Cadastro"]
         return pd.DataFrame(columns=cols)
+    return pd.DataFrame(data)
+
+def get_notas_data():
+    data = ws_notas.get_all_records()
+    if not data:
+        return pd.DataFrame(columns=["DataHora", "ID_Lead", "Nota"])
     return pd.DataFrame(data)
 
 def gerar_id():
@@ -92,6 +99,7 @@ st.sidebar.title("Forest CRM 🌲")
 menu = st.sidebar.radio("Navegação", ["Kanban Comercial", "Novo Lead", "Fila de Cadastro", "Relatórios & Auditoria"])
 
 df_leads = get_leads_data()
+df_notas = get_notas_data()
 
 # --- TELA 1: NOVO LEAD ---
 if menu == "Novo Lead":
@@ -115,12 +123,11 @@ if menu == "Novo Lead":
             if not nome or not contato:
                 st.error("Nome e Telefone são obrigatórios.")
             else:
-                novo_id = generar_id()
+                novo_id = gerar_id()
                 agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 tel_formatado = formatar_telefone(contato)
                 doc_formatado = formatar_cpf_cnpj(cpf_cnpj)
                 
-                # 16 colunas com Cidade na posição correta
                 nova_linha = [novo_id, nome, tel_formatado, condominio, cidade, origem, doc_formatado, "Em Aberto", agora, "", "", "", "", "", ""]
                 ws_leads.append_row(nova_linha)
                 registrar_timeline(novo_id, nome, "Criação", "Em Aberto")
@@ -153,19 +160,17 @@ elif menu == "Kanban Comercial":
                 leads_fase = df_leads[df_leads['Status_atual'] == fase]
                 
                 for index, lead in leads_fase.iterrows():
-                    # Identificação visual rápida no topo do card
                     local_info = lead['Condominio'] if lead['Condominio'] else (lead['Cidade'] if lead['Cidade'] else "Sem Local")
                     
                     with st.expander(f"{lead['Nome']} | {local_info}"):
                         
                         # CÁLCULO DE TEMPO
                         dias_total = calc_dias(lead['TS_Criacao'])
-                        ts_fase_atual = ""
-                        if fase == "Em Aberto": ts_fase_atual = lead['TS_Criacao']
-                        elif fase == "Em Contato": ts_fase_atual = lead['TS_EmContato']
-                        elif fase == "Fechamento": ts_fase_atual = lead['TS_Fechamento']
+                        ts_fase_atual = lead.get(f'TS_{fase.replace(" ", "")}', lead['TS_Criacao'] if fase == "Em Aberto" else "")
+                        if fase == "Fechamento": ts_fase_atual = lead['TS_Fechamento']
                         elif fase == "Concluído": ts_fase_atual = lead['TS_Concluido']
                         elif fase == "Perdido": ts_fase_atual = lead['TS_Perdido']
+                        
                         dias_fase = calc_dias(ts_fase_atual)
                         
                         st.caption(f"ID: {lead['ID_Lead']} | Origem: {lead['Origem']}")
@@ -174,8 +179,8 @@ elif menu == "Kanban Comercial":
                         if lead['CPF_CNPJ']: st.write(f"🪪 Doc: {lead['CPF_CNPJ']}")
                         st.markdown(f"⏳ **{dias_total} dias** no funil | 📍 **{dias_fase} dias** nesta etapa")
                         
-                        # --- ABAS INTERNAS DO CARD: MOVER OU EDITAR ---
-                        tab_status, tab_editar = st.tabs(["Mover Etapa", "✏️ Editar Dados"])
+                        # --- ABAS INTERNAS DO CARD ---
+                        tab_status, tab_editar, tab_notas = st.tabs(["Mover Etapa", "✏️ Editar", "💬 Notas"])
                         
                         with tab_status:
                             if fase not in ["Concluído", "Perdido"]:
@@ -204,7 +209,6 @@ elif menu == "Kanban Comercial":
                                 st.info("Leads finalizados não podem mudar de etapa por aqui.")
 
                         with tab_editar:
-                            # Formulário inline de edição rápida
                             up_nome = st.text_input("Nome", value=lead['Nome'], key=f"u_nome_{lead['ID_Lead']}")
                             up_contato = st.text_input("Telefone", value=lead['Contato'], key=f"u_tel_{lead['ID_Lead']}")
                             up_cond = st.text_input("Condomínio", value=lead['Condominio'], key=f"u_cond_{lead['ID_Lead']}")
@@ -220,6 +224,24 @@ elif menu == "Kanban Comercial":
                                 ws_leads.update_cell(r_idx, df_leads.columns.get_loc('CPF_CNPJ') + 1, formatar_cpf_cnpj(up_doc))
                                 st.success("Dados salvos!")
                                 st.rerun()
+                                
+                        with tab_notas:
+                            notas_do_lead = df_notas[df_notas['ID_Lead'] == lead['ID_Lead']]
+                            if not notas_do_lead.empty:
+                                for _, nota in notas_do_lead.iterrows():
+                                    st.caption(f"🕒 {nota['DataHora']}")
+                                    st.write(f"💬 {nota['Nota']}")
+                                    st.divider()
+                            else:
+                                st.write("Nenhuma anotação ainda.")
+                                
+                            nova_nota = st.text_area("Nova anotação:", key=f"txt_nota_{lead['ID_Lead']}")
+                            if st.button("Salvar Nota", key=f"btn_nota_{lead['ID_Lead']}"):
+                                if nova_nota:
+                                    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    ws_notas.append_row([agora, lead['ID_Lead'], nova_nota])
+                                    st.success("Nota salva!")
+                                    st.rerun()
 
 # --- TELA 3: FILA DE CADASTRO ---
 elif menu == "Fila de Cadastro":
@@ -264,4 +286,4 @@ elif menu == "Relatórios & Auditoria":
             else:
                 st.write("Timeline vazia.")
         except:
-            st.write("Erro ao carregar a aba DB_Timeline. Verifique se os cabeçalhos existem: DataHora, ID_Lead, Nome, Fase_Anterior, Nova_Fase.")
+            st.write("Erro ao carregar a aba DB_Timeline. Verifique se os cabeçalhos existem.")
