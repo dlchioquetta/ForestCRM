@@ -9,7 +9,6 @@ import uuid
 # ==========================================
 st.set_page_config(page_title="Forest CRM", layout="wide")
 
-@st.cache_resource
 def init_connection():
     # Puxa APENAS as credenciais do TOML
     creds_dict = st.secrets["gcp_service_account"]
