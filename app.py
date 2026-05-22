@@ -30,7 +30,7 @@ except Exception as e:
 def get_leads_data():
     data = ws_leads.get_all_records()
     if not data:
-        cols = ["ID_Lead", "Nome", "Contato", "Condominio", "Origem", "CPF_CNPJ", "Status_atual", "TS_Criacao", "TS_EmContato", "TS_Fechamento", "TS_Concluido", "TS_Perdido", "Fase_Perda", "Motivo_Perda", "Status_Cadastro"]
+        cols = ["ID_Lead", "Nome", "Contato", "Condominio", "Cidade", "Origem", "CPF_CNPJ", "Status_atual", "TS_Criacao", "TS_EmContato", "TS_Fechamento", "TS_Concluido", "TS_Perdido", "Fase_Perda", "Motivo_Perda", "Status_Cadastro"]
         return pd.DataFrame(columns=cols)
     return pd.DataFrame(data)
 
@@ -44,6 +44,7 @@ def formatar_telefone(telefone):
     return telefone
 
 def formatar_cpf_cnpj(doc):
+    if not doc: return ""
     n = re.sub(r'\D', '', doc)
     if len(n) == 11: return f"{n[:3]}.{n[3:6]}.{n[6:9]}-{n[9:]}"
     if len(n) == 14: return f"{n[:2]}.{n[2:5]}.{n[5:8]}/{n[8:12]}-{n[12:]}"
@@ -101,23 +102,26 @@ if menu == "Novo Lead":
         contato = col2.text_input("Telefone (Apenas números) *")
         
         col3, col4 = st.columns(2)
-        condominio = col3.text_input("Condomínio *")
-        origem = col4.selectbox("Origem", ["Indicação", "Prospecção", "Campanha SEO"])
+        condominio = col3.text_input("Condomínio (Opcional)")
+        cidade = col4.text_input("Cidade (Opcional)")
         
-        cpf_cnpj = st.text_input("CPF/CNPJ (Apenas números - Opcional nesta fase)")
+        col5, col6 = st.columns(2)
+        origem = col5.selectbox("Origem", ["Indicação", "Prospecção", "Campanha SEO"])
+        cpf_cnpj = col6.text_input("CPF/CNPJ (Apenas números - Opcional)")
         
         submit = st.form_submit_button("Criar Lead")
         
         if submit:
-            if not nome or not contato or not condominio:
-                st.error("Preencha os campos obrigatórios (*).")
+            if not nome or not contato:
+                st.error("Nome e Telefone são obrigatórios.")
             else:
-                novo_id = gerar_id()
+                novo_id = generar_id()
                 agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 tel_formatado = formatar_telefone(contato)
-                doc_formatado = formatar_cpf_cnpj(cpf_cnpj) if cpf_cnpj else ""
+                doc_formatado = formatar_cpf_cnpj(cpf_cnpj)
                 
-                nova_linha = [novo_id, nome, tel_formatado, condominio, origem, doc_formatado, "Em Aberto", agora, "", "", "", "", "", "", ""]
+                # 16 colunas com Cidade na posição correta
+                nova_linha = [novo_id, nome, tel_formatado, condominio, cidade, origem, doc_formatado, "Em Aberto", agora, "", "", "", "", "", ""]
                 ws_leads.append_row(nova_linha)
                 registrar_timeline(novo_id, nome, "Criação", "Em Aberto")
                 st.success(f"Lead {nome} criado com sucesso! (ID: {novo_id})")
@@ -149,9 +153,12 @@ elif menu == "Kanban Comercial":
                 leads_fase = df_leads[df_leads['Status_atual'] == fase]
                 
                 for index, lead in leads_fase.iterrows():
-                    with st.expander(f"{lead['Nome']} | {lead['Condominio']}"):
+                    # Identificação visual rápida no topo do card
+                    local_info = lead['Condominio'] if lead['Condominio'] else (lead['Cidade'] if lead['Cidade'] else "Sem Local")
+                    
+                    with st.expander(f"{lead['Nome']} | {local_info}"):
                         
-                        # CALCULO DE TEMPO
+                        # CÁLCULO DE TEMPO
                         dias_total = calc_dias(lead['TS_Criacao'])
                         ts_fase_atual = ""
                         if fase == "Em Aberto": ts_fase_atual = lead['TS_Criacao']
@@ -163,30 +170,55 @@ elif menu == "Kanban Comercial":
                         
                         st.caption(f"ID: {lead['ID_Lead']} | Origem: {lead['Origem']}")
                         st.write(f"📞 {lead['Contato']}")
+                        if lead['Cidade']: st.write(f"📍 Cidade: {lead['Cidade']}")
+                        if lead['CPF_CNPJ']: st.write(f"🪪 Doc: {lead['CPF_CNPJ']}")
                         st.markdown(f"⏳ **{dias_total} dias** no funil | 📍 **{dias_fase} dias** nesta etapa")
                         
-                        # CONTROLES DE STATUS (Apenas se não estiver Concluído/Perdido)
-                        if fase not in ["Concluído", "Perdido"]:
-                            novo_status = st.selectbox(
-                                "Mover para:", 
-                                ["", "Em Aberto", "Em Contato", "Fechamento", "Concluído", "Perdido"], 
-                                key=f"status_{lead['ID_Lead']}"
-                            )
+                        # --- ABAS INTERNAS DO CARD: MOVER OU EDITAR ---
+                        tab_status, tab_editar = st.tabs(["Mover Etapa", "✏️ Editar Dados"])
+                        
+                        with tab_status:
+                            if fase not in ["Concluído", "Perdido"]:
+                                novo_status = st.selectbox(
+                                    "Mover para:", 
+                                    ["", "Em Aberto", "Em Contato", "Fechamento", "Concluído", "Perdido"], 
+                                    key=f"status_{lead['ID_Lead']}"
+                                )
+                                
+                                if novo_status == "Perdido":
+                                    motivo = st.text_input("Motivo da Perda (Obrigatório)", key=f"motivo_{lead['ID_Lead']}")
+                                    if st.button("Confirmar Perda", key=f"confirm_{lead['ID_Lead']}"):
+                                        if motivo:
+                                            update_lead_status(lead['ID_Lead'], lead['Nome'], "Perdido", index + 2, df_leads, fase)
+                                            col_motivo = df_leads.columns.get_loc('Motivo_Perda') + 1
+                                            ws_leads.update_cell(index + 2, col_motivo, motivo)
+                                            st.success("Lead arquivado.")
+                                            st.rerun()
+                                        else:
+                                            st.error("Escreva o motivo.")
+                                
+                                elif novo_status and novo_status != fase:
+                                    update_lead_status(lead['ID_Lead'], lead['Nome'], novo_status, index + 2, df_leads, fase)
+                                    st.rerun()
+                            else:
+                                st.info("Leads finalizados não podem mudar de etapa por aqui.")
+
+                        with tab_editar:
+                            # Formulário inline de edição rápida
+                            up_nome = st.text_input("Nome", value=lead['Nome'], key=f"u_nome_{lead['ID_Lead']}")
+                            up_contato = st.text_input("Telefone", value=lead['Contato'], key=f"u_tel_{lead['ID_Lead']}")
+                            up_cond = st.text_input("Condomínio", value=lead['Condominio'], key=f"u_cond_{lead['ID_Lead']}")
+                            up_cid = st.text_input("Cidade", value=lead['Cidade'], key=f"u_cid_{lead['ID_Lead']}")
+                            up_doc = st.text_input("CPF/CNPJ", value=lead['CPF_CNPJ'], key=f"u_doc_{lead['ID_Lead']}")
                             
-                            if novo_status == "Perdido":
-                                motivo = st.text_input("Motivo da Perda (Obrigatório)", key=f"motivo_{lead['ID_Lead']}")
-                                if st.button("Confirmar Perda", key=f"confirm_{lead['ID_Lead']}"):
-                                    if motivo:
-                                        update_lead_status(lead['ID_Lead'], lead['Nome'], "Perdido", index + 2, df_leads, fase)
-                                        col_motivo = df_leads.columns.get_loc('Motivo_Perda') + 1
-                                        ws_leads.update_cell(index + 2, col_motivo, motivo)
-                                        st.success("Lead arquivado.")
-                                        st.rerun()
-                                    else:
-                                        st.error("Escreva o motivo.")
-                            
-                            elif novo_status and novo_status != fase:
-                                update_lead_status(lead['ID_Lead'], lead['Nome'], novo_status, index + 2, df_leads, fase)
+                            if st.button("Salvar Alterações", key=f"save_btn_{lead['ID_Lead']}"):
+                                r_idx = index + 2
+                                ws_leads.update_cell(r_idx, df_leads.columns.get_loc('Nome') + 1, up_nome)
+                                ws_leads.update_cell(r_idx, df_leads.columns.get_loc('Contato') + 1, formatar_telefone(up_contato))
+                                ws_leads.update_cell(r_idx, df_leads.columns.get_loc('Condominio') + 1, up_cond)
+                                ws_leads.update_cell(r_idx, df_leads.columns.get_loc('Cidade') + 1, up_cid)
+                                ws_leads.update_cell(r_idx, df_leads.columns.get_loc('CPF_CNPJ') + 1, formatar_cpf_cnpj(up_doc))
+                                st.success("Dados salvos!")
                                 st.rerun()
 
 # --- TELA 3: FILA DE CADASTRO ---
@@ -201,8 +233,8 @@ elif menu == "Fila de Cadastro":
         else:
             for index, lead in pendentes.iterrows():
                 with st.container(border=True):
-                    st.subheader(f"{lead['Nome']} - {lead['Condominio']}")
-                    st.code(f"Nome: {lead['Nome']}\nTelefone: {lead['Contato']}\nCPF/CNPJ: {lead['CPF_CNPJ']}\nCondomínio: {lead['Condominio']}")
+                    st.subheader(f"{lead['Nome']}")
+                    st.code(f"Nome: {lead['Nome']}\nTelefone: {lead['Contato']}\nCPF/CNPJ: {lead['CPF_CNPJ']}\nCondomínio: {lead['Condominio']}\nCidade: {lead['Cidade']}")
                     if st.button("Marcar como Cadastrado", key=f"cad_{lead['ID_Lead']}"):
                         col_status_cad = df_leads.columns.get_loc('Status_Cadastro') + 1
                         ws_leads.update_cell(index + 2, col_status_cad, "Concluído")
@@ -218,7 +250,7 @@ elif menu == "Relatórios & Auditoria":
         st.subheader("Panorama de Perdas")
         perdas = df_leads[df_leads['Status_atual'] == 'Perdido']
         if not perdas.empty:
-            st.dataframe(perdas[['Nome', 'Condominio', 'Fase_Perda', 'Motivo_Perda']], use_container_width=True)
+            st.dataframe(perdas[['Nome', 'Condominio', 'Cidade', 'Fase_Perda', 'Motivo_Perda']], use_container_width=True)
         else:
             st.write("Nenhuma perda registrada.")
             
@@ -228,7 +260,6 @@ elif menu == "Relatórios & Auditoria":
             data_timeline = ws_timeline.get_all_records()
             if data_timeline:
                 df_time = pd.DataFrame(data_timeline)
-                # Inverte para mostrar os mais recentes primeiro
                 st.dataframe(df_time.iloc[::-1], use_container_width=True) 
             else:
                 st.write("Timeline vazia.")
